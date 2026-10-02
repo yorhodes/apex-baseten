@@ -6,7 +6,7 @@ Deploys the exact public BF16 checkpoint with SGLang 0.5.20 and an OpenAI-compat
 
 The checkpoint contains 321,322,735,872 BF16 parameters plus a small number of F32 parameters: approximately 642.65 GB / 598.5 GiB of raw weights. `B200:4` provides 720 GiB according to Baseten's resource table. The configuration caps context at 32,768 tokens and concurrency at eight requests to leave runtime headroom.
 
-The configuration passes Truss schema validation and Baseten's authenticated push dry run. The real push was rejected because the workspace needs a payment method; no GPU deployment was created. This is a first-deployment configuration, not a GPU-tested performance claim. SGLang 0.5.20 includes `Glm5NextForConditionalGeneration`; the exact Cantina checkpoint still needs a real startup and inference test. If memory is insufficient, use `B200:8` and change `--tp-size 4` to `--tp-size 8`, or reduce context/concurrency. Eight GPUs cost twice as much. The BF16 configuration deliberately uses Triton MoE and TileLang DSA rather than copying kernels from an FP8 recipe.
+The configuration passes Truss schema validation and Baseten's authenticated push dry run. No GPU deployment has started: billing is now configured, but the workspace's available-instance API excludes B200/H200, and the real push rejects the requested four-B200 instance. Baseten must enable the required hardware access before deployment. This is a first-deployment configuration, not a GPU-tested performance claim. SGLang 0.5.20 includes `Glm5NextForConditionalGeneration`; the exact Cantina checkpoint still needs a real startup and inference test. If memory is insufficient, use `B200:8` and change `--tp-size 4` to `--tp-size 8`, or reduce context/concurrency. Eight GPUs cost twice as much. The BF16 configuration deliberately uses Triton MoE and TileLang DSA rather than copying kernels from an FP8 recipe.
 
 Start without speculative decoding. After correctness validation, benchmark the native MTP head with `--speculative-algorithm EAGLE --speculative-num-steps 5 --speculative-eagle-topk 1 --speculative-num-draft-tokens 6`. Draft acceptance and speed must be measured on this derivative.
 
@@ -18,6 +18,14 @@ Install the Baseten CLI following [Baseten's installation instructions](https://
 baseten auth login --web
 bash deploy.sh
 ```
+
+A payment method and access to `B200:4` are required. Check available instance types before pushing:
+
+```sh
+baseten api management /v1/instance_types --jq '.instance_types | map(select(.gpu_type == "B200" and .gpu_count == 4))'
+```
+
+If this returns an empty list, request four-B200 access from Baseten support. Adding prepaid credits does not enable a missing GPU instance type; usage can be billed to the payment method after any existing credits are applied.
 
 For a CLI installed somewhere else:
 
