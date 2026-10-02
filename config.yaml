@@ -1,0 +1,58 @@
+model_name: apex-flash-1-abliterated
+model_metadata:
+  tags:
+    - openai-compatible
+  example_model_input:
+    model: cantina-security/apex-flash-1-abliterated
+    messages:
+      - role: user
+        content: Explain what a reentrancy guard does in Solidity.
+    max_tokens: 1024
+    temperature: 1.0
+    top_p: 0.95
+    stream: true
+
+# GLM-5.3-Flash support is present in SGLang v0.5.20.
+# Pin both the container and the original, unquantized BF16 checkpoint.
+base_image:
+  image: lmsysorg/sglang:v0.5.20@sha256:06e4f2ed21afde4ff513cda65070124e727ba23ccaeff7712b8c40e1097d611f
+weights:
+  - source: hf://cantina-security/apex-flash-1-abliterated@cecb5eeb9c6b32404a0dd930df81de2c239bdd84
+    mount_location: /models/apex
+
+resources:
+  instance_type: B200:4
+
+# Start with bounded context and concurrency for the first GPU validation.
+# Use BF16-compatible kernels; the upstream FP8 recipe uses different MoE kernels.
+docker_server:
+  start_command: >-
+    python3 -m sglang.launch_server
+    --model-path /models/apex
+    --served-model-name cantina-security/apex-flash-1-abliterated
+    --tp-size 4
+    --dtype bfloat16
+    --context-length 32768
+    --max-running-requests 8
+    --mem-fraction-static 0.90
+    --attention-backend dsa
+    --dsa-prefill-backend tilelang
+    --dsa-decode-backend tilelang
+    --kv-cache-dtype bfloat16
+    --moe-runner-backend triton
+    --reasoning-parser glm45
+    --tool-call-parser glm47
+    --host 0.0.0.0
+    --port 8000
+  server_port: 8000
+  readiness_endpoint: /health
+  liveness_endpoint: /health
+  predict_endpoint: /v1/chat/completions
+
+runtime:
+  predict_concurrency: 8
+  streaming_read_timeout: 300
+  health_checks:
+    startup_threshold_seconds: 3000
+    stop_traffic_threshold_seconds: 120
+    restart_threshold_seconds: 600
