@@ -4,9 +4,13 @@ Deploys the exact public BF16 checkpoint with SGLang 0.5.20 and an OpenAI-compat
 
 ## Hardware and validation status
 
-The checkpoint contains 321,322,735,872 BF16 parameters plus a small number of F32 parameters: approximately 642.65 GB / 598.5 GiB of raw weights. `B200:4` provides 720 GiB according to Baseten's resource table. The configuration caps context at 32,768 tokens and concurrency at eight requests to leave runtime headroom.
+The checkpoint contains 321,322,735,872 BF16 parameters plus a small number of F32 parameters: approximately 642.65 GB / 598.5 GiB of raw weights. `B200:4` provides 720 GiB according to Baseten's resource table. The configuration caps total context at 131,072 tokens and concurrency at two requests to leave room for longer security-review reasoning.
 
-The configuration passes Truss schema validation and Baseten's authenticated push dry run. No GPU deployment has started: billing is now configured, but the workspace's available-instance API excludes B200/H200, and the real push rejects the requested four-B200 instance. Baseten must enable the required hardware access before deployment. This is a first-deployment configuration, not a GPU-tested performance claim. SGLang 0.5.20 includes `Glm5NextForConditionalGeneration`; the exact Cantina checkpoint still needs a real startup and inference test. If memory is insufficient, use `B200:8` and change `--tp-size 4` to `--tp-size 8`, or reduce context/concurrency. Eight GPUs cost twice as much. The BF16 configuration deliberately uses Triton MoE and TileLang DSA rather than copying kernels from an FP8 recipe.
+B200 access is enabled, and the exact Cantina checkpoint passed startup and streaming inference validation at 32,768 context on October 2, 2026. That replica was deactivated after the audit. The new 131,072 context configuration is prepared for validation, with zero minimum and one maximum replica.
+
+In the initial validation, weights loaded in approximately 253 seconds, using 146.8 GiB per GPU. Cache allocation and decode CUDA graph capture succeeded, leaving approximately 16.7 GiB free per GPU at the original 32,768-token context and eight-request limit. The BF16 configuration uses Triton MoE and TileLang DSA. SGLang reported fallback MoE kernel configurations for this B200 shape. The larger context, tool calling, multimodal inputs and concurrent long requests have not yet been validated.
+
+The pinned checkpoint declares `text_config.max_position_embeddings: 1048576`, but that is not a validated serving limit on this hardware. SGLang's Responses implementation budgets generation from configured context minus prompt/reserved tokens; reasoning and the visible answer share that budget. A local capture of Codex CLI 0.160.0 confirmed it omits `max_output_tokens`, so SGLang chooses the remaining budget. The private Codex profile/catalog now advertise 131,072 context, with automatic compaction at 64,000 tokens to preserve generation headroom. Direct API callers can request `max_output_tokens: 65536` (Responses) or `max_tokens: 65536` (Chat Completions), provided prompt plus generation fits the server limit.
 
 Start without speculative decoding. After correctness validation, benchmark the native MTP head with `--speculative-algorithm EAGLE --speculative-num-steps 5 --speculative-eagle-topk 1 --speculative-num-draft-tokens 6`. Draft acceptance and speed must be measured on this derivative.
 
@@ -33,15 +37,16 @@ For a CLI installed somewhere else:
 BASETEN_CLI=/path/to/baseten bash deploy.sh
 ```
 
-The script pushes a published deployment and immediately requests:
+For this existing model, the script sets production autoscaling before pushing a new production deployment, then applies the same settings to that deployment:
 
-- Minimum replicas: one (keep warm, as requested).
+- Minimum replicas: zero (release idle GPU compute).
 - Maximum replicas: one (one replica comprises all four GPUs).
-- Scale-down delay: 300 seconds (the one-replica minimum prevents scale-to-zero).
+- Scale-down delay: 60 seconds.
+- Concurrency target: two requests.
 
-Autoscaling changes apply asynchronously. Inspect the deployment with the command printed by the script and verify the settled values. If the autoscaling update fails, resolve it promptly or deactivate the deployment; the push may already have created a billable replica. `deployment.json` records the deployment IDs, endpoint, and logs URL and is excluded from version control. An unpublished model is not automatically assigned to production; the smoke test uses the deployment-specific URL returned by push.
+Autoscaling changes apply asynchronously. Inspect the deployment with the command printed by the script and verify the settled values. Startup/validation can still allocate a billable replica; deactivate it after verification if continued serving is not needed. Deployment IDs, endpoint and logs URL are saved outside the repository, in `apex-baseten-deployment.json` in the system temporary directory. The smoke test uses the deployment-specific URL returned by push.
 
-To enable scale-to-zero later, update the deployed model with `baseten model deployment update-autoscaling --model-id MODEL_ID --deployment-id DEPLOYMENT_ID --min-replica 0` and change the script's floor accordingly. The current default keeps all four GPUs allocated between requests.
+The deployment default is scale-to-zero. To hold a model warm for an active work session, explicitly raise the minimum to one, then lower it to zero or deactivate when finished.
 
 ## Call and measure
 
@@ -59,11 +64,21 @@ For the OpenAI SDK, the corresponding deployment-specific base URL is:
 https://model-MODEL_ID.api.baseten.co/deployment/DEPLOYMENT_ID/sync/v1
 ```
 
+For a stable production base URL:
+
+```text
+https://model-MODEL_ID.api.baseten.co/environments/production/sync/v1
+```
+
+Use model name `cantina-security/apex-flash-1-abliterated` and your individual inference-only key as `OPENAI_API_KEY`. Keep credentials, share links, and account-specific deployment metadata outside this repository.
+
+The first external streaming smoke test returned `2 + 2 = 4`, with a first chunk at 3.32 seconds and total time of 4.58 seconds, including reasoning output. This is one short request, not a throughput benchmark.
+
 ## Cost and cold starts
 
 Baseten lists `B200:4` at $0.66532/minute, or $39.9192/hour per running replica (checked October 2, 2026). Model loading and warm idle time are billable; scaled-to-zero replicas incur no GPU compute charge. Image builds are billed separately. A five-minute idle delay represents about $3.33 of running time after requests stop, plus any autoscaling/termination delay.
 
-There is no measured cold-start result for this deployment yet. Budgeting 5–15 minutes is only a rough planning estimate; initial weight mirroring, uncached image pulls, kernel compilation, and GPU scheduling may make the first deployment substantially longer. Keep it warm during an interactive work session if repeated restarts would be disruptive.
+The initial deployment took approximately 26 minutes from creation to readiness, including image build, initial weight mirroring, scheduling, replica downloads, model loading, and compilation. The replica downloaded the 643 GB checkpoint in approximately 623 seconds; model loading took 253 seconds and decode CUDA graph capture took 139 seconds. Subsequent starts may benefit from caches, but wake-from-zero latency has not been measured. Keep it warm during an interactive work session if repeated restarts would be disruptive.
 
 ## Alternative host
 

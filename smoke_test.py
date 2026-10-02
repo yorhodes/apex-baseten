@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -13,11 +14,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", help="Override the predict URL; useful for another host.")
     parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--max-tokens", type=int, default=1024, help="Generation budget, including reasoning.")
     args = parser.parse_args()
+    if args.max_tokens <= 0:
+        parser.error("--max-tokens must be positive")
     if args.url:
         url = args.url
     else:
-        deployment = json.loads(Path(__file__).with_name("deployment.json").read_text())
+        deployment = json.loads((Path(tempfile.gettempdir()) / "apex-baseten-deployment.json").read_text())
         url = deployment["predict_url"]
     headers = {"Content-Type": "application/json"}
     api_key = os.environ.get("BASETEN_API_KEY")
@@ -28,7 +32,7 @@ def main():
     body = {
         "model": "cantina-security/apex-flash-1-abliterated",
         "messages": [{"role": "user", "content": "What is 2 + 2?"}],
-        "max_tokens": 1024,
+        "max_tokens": args.max_tokens,
         "temperature": 1.0,
         "top_p": 0.95,
         "stream": True,

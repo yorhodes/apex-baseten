@@ -23,7 +23,7 @@ weights:
 resources:
   instance_type: B200:4
 
-# Start with bounded context and concurrency for the first GPU validation.
+# Reserve more room for security-review reasoning and reduce concurrency.
 # Use BF16-compatible kernels; the upstream FP8 recipe uses different MoE kernels.
 docker_server:
   start_command: >-
@@ -32,8 +32,8 @@ docker_server:
     --served-model-name cantina-security/apex-flash-1-abliterated
     --tp-size 4
     --dtype bfloat16
-    --context-length 32768
-    --max-running-requests 8
+    --context-length 131072
+    --max-running-requests 2
     --mem-fraction-static 0.90
     --attention-backend dsa
     --dsa-prefill-backend tilelang
@@ -50,7 +50,7 @@ docker_server:
   predict_endpoint: /v1/chat/completions
 
 runtime:
-  predict_concurrency: 8
+  predict_concurrency: 2
   streaming_read_timeout: 300
   health_checks:
     startup_threshold_seconds: 3000
